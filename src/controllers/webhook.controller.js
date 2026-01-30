@@ -1,5 +1,6 @@
 import pool from "../db.js";
 import axios from "axios";
+import crypto from "crypto";
 
 const receiveWebhook = async (req, res) => {
   const { projectId } = req.params;
@@ -17,44 +18,58 @@ const receiveWebhook = async (req, res) => {
 
     const project = projectResult.rows[0];
 
-    // 2️⃣ Store webhook
-    const insertResult = await pool.query(
-      `INSERT INTO webhook_requests
-       (project_id, method, headers, body, raw_body, source_ip)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING id`,
-      [
-        project.id,
-        req.method,
-        req.headers,
-        req.body,
-        req.rawBody,
-        req.ip
-      ]
-    );
+    // 2️⃣ Compute payload hash (IDEMPOTENCY KEY)
+    const payloadHash = crypto
+      .createHash("sha256")
+      .update(req.rawBody)
+      .digest("hex");
 
-    const requestId = insertResult.rows[0].id;
+    // 3️⃣ Store webhook (idempotent insert)
+    let requestId;
+    try {
+      const insertResult = await pool.query(
+        `INSERT INTO webhook_requests
+         (project_id, method, headers, body, raw_body, source_ip, payload_hash)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id`,
+        [
+          project.id,
+          req.method,
+          req.headers,
+          req.body,
+          req.rawBody,
+          req.ip,
+          payloadHash
+        ]
+      );
+      requestId = insertResult.rows[0].id;
+    } catch (err) {
+      // 4️⃣ Duplicate detected → acknowledge & stop
+      if (err.code === "23505") { // unique_violation
+        return res.status(200).json({
+          message: "Duplicate webhook ignored"
+        });
+      }
+      throw err;
+    }
 
-    // 3️⃣ Respond to Stripe IMMEDIATELY
+    // 5️⃣ Acknowledge Stripe immediately
     res.status(200).json({
       message: "Webhook received",
       requestId
     });
 
-    // 4️⃣ Forward asynchronously (do NOT await response above)
+    // 6️⃣ Forward asynchronously (same as Day 3)
     if (project.target_url) {
       try {
         const forwardResponse = await axios({
           method: req.method,
           url: project.target_url,
-          headers: {
-            "Content-Type": "application/json"
-          },
+          headers: { "Content-Type": "application/json" },
           data: req.body,
           timeout: 5000
         });
 
-        // 5️⃣ Save forwarding success
         await pool.query(
           `UPDATE webhook_requests
            SET forwarded_status = $1,
@@ -67,7 +82,6 @@ const receiveWebhook = async (req, res) => {
           ]
         );
       } catch (forwardError) {
-        // 6️⃣ Save forwarding failure
         await pool.query(
           `UPDATE webhook_requests
            SET forwarded_status = $1,
