@@ -1,8 +1,29 @@
 import pool from "../db.js";
 import axios from "axios";
 import crypto from "crypto";
+import Stripe from "stripe";
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "dummy");
+
+
 
 const receiveWebhook = async (req, res) => {
+    const sig = req.headers["stripe-signature"];
+
+  // 🔐 Verify Stripe signature (ONLY if secret is set)
+  if (process.env.STRIPE_WEBHOOK_SECRET) {
+    try {
+      Stripe.webhooks.constructEvent(
+        req.rawBody,
+        sig,
+        process.env.STRIPE_WEBHOOK_SECRET
+      );
+    } catch (err) {
+      console.error("❌ Invalid Stripe signature:", err.message);
+      return res.status(400).json({ error: "Invalid signature" });
+    }
+  }
+  
   const { projectId } = req.params;
 
   try {
