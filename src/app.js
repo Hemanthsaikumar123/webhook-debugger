@@ -3,11 +3,12 @@ import cors from "cors";
 import bodyParser from "body-parser";
 
 import webhookRoutes from "./routes/webhook.routes.js";
-
+import projectRoutes from "./routes/project.routes.js";
 
 const app = express();
 
 app.use(cors());
+app.use("/projects", projectRoutes);
 
 // IMPORTANT: capture raw body (needed later for signature verification)
 app.use(
