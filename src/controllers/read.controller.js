@@ -33,24 +33,31 @@ export const listProjectWebhooks = async (req, res) => {
 
 // 2️⃣ Inspect a single webhook
 export const getWebhookById = async (req, res) => {
-  const { id } = req.params;
+  const { slug, id } = req.params;
 
   try {
     const result = await pool.query(
-      `SELECT id, method, headers, body, raw_body, source_ip,
-              received_at, forwarded_status, forwarded_response
-       FROM webhook_requests
-       WHERE id = $1`,
-      [id]
+      `
+      SELECT wr.*
+      FROM webhook_requests wr
+      JOIN projects p ON wr.project_id = p.id
+      WHERE wr.id = $1 AND p.slug = $2
+      `,
+      [id, slug]
     );
 
     if (result.rowCount === 0) {
-      return res.status(404).json({ error: "Webhook not found" });
+      return res.status(404).json({
+        error: "Webhook not found for this project"
+      });
     }
 
     return res.status(200).json(result.rows[0]);
   } catch (err) {
-    console.error("Inspect error:", err);
-    return res.status(500).json({ error: "Failed to fetch webhook" });
+    console.error("Fetch webhook error:", err);
+    return res.status(500).json({
+      error: "Failed to fetch webhook"
+    });
   }
 };
+
